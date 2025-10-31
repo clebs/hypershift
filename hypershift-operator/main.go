@@ -49,6 +49,7 @@ import (
 	"github.com/openshift/hypershift/support/supportedversion"
 	"github.com/openshift/hypershift/support/upsert"
 	hyperutil "github.com/openshift/hypershift/support/util"
+	"go.opentelemetry.io/otel"
 
 	operatorv1 "github.com/openshift/api/operator/v1"
 
@@ -541,6 +542,25 @@ func run(ctx context.Context, opts *StartOptions, log logr.Logger) error {
 	if err := setupOperatorInfoMetric(mgr); err != nil {
 		return fmt.Errorf("failed to setup metrics: %w", err)
 	}
+
+	// Setup OpenTelemetry tracing
+	tp, err := setupTracing(ctx, mgr)
+	if err != nil {
+		return fmt.Errorf("failed to setup tracing: %w", err)
+	}
+	defer func() {
+		if err := tp.Shutdown(ctx); err != nil {
+			log.Error(err, "failed to shutdown tracer provider")
+		}
+	}()
+
+	// global tracer
+	// simplest solution for now
+	otel.SetTracerProvider(tp)
+
+	// non global: get the tracer and store it somewhere to aceess during reconciliation
+	// this option also requires some changes on the reconciler code to use otel instead of k8s.io/component-base/tracing
+	// hostedClusterReconciler.tracer = tp.Tracer("hypershift-operator")
 
 	// Start the controllers
 	log.Info("starting manager")

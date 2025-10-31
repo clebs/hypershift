@@ -95,6 +95,10 @@ import (
 	"k8s.io/utils/clock"
 	"k8s.io/utils/ptr"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
+
 	capiv1 "sigs.k8s.io/cluster-api/api/v1beta1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -333,16 +337,36 @@ func (r *HostedClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	log := ctrl.LoggerFrom(ctx)
 	log.Info("reconciling")
 
+	log.Info("Sending traces")
+	// Start a trace span for the reconcile operation
+	ctx, span := otel.GetTracerProvider().Tracer("hypershift-operator").Start(ctx, "HostedCluster.Reconcile",
+		trace.WithAttributes(
+			attribute.String("namespace", req.Namespace),
+			attribute.String("name", req.Name),
+		),
+	)
+	defer span.End()
+
 	// Look up the HostedCluster instance to reconcile
 	hcluster := &hyperv1.HostedCluster{}
 	err := r.Get(ctx, req.NamespacedName, hcluster)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			log.Info("hostedcluster not found, aborting reconcile", "name", req.NamespacedName)
+			span.AddEvent("hostedcluster not found")
 			return ctrl.Result{}, nil
 		}
+		span.RecordError(err)
 		return ctrl.Result{}, fmt.Errorf("failed to get cluster %q: %w", req.NamespacedName, err)
 	}
+
+	// Add cluster attributes to the span
+	span.AddEvent("found hostedcluster",
+		trace.WithAttributes(
+			attribute.String("platform", string(hcluster.Spec.Platform.Type)),
+			attribute.String("clusterID", string(hcluster.Spec.ClusterID)),
+		),
+	)
 
 	var res reconcile.Result
 	if r.overwriteReconcile != nil {
@@ -362,6 +386,7 @@ func (r *HostedClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		condition.Status = metav1.ConditionFalse
 		condition.Reason = "ReconciliationError"
 		condition.Message = err.Error()
+		span.RecordError(err, trace.WithAttributes(attribute.String("reason", "ReconciliationError")))
 	}
 	old := meta.FindStatusCondition(hcluster.Status.Conditions, string(hyperv1.ReconciliationSucceeded))
 	if old != nil {

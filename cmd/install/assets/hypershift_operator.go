@@ -550,6 +550,25 @@ func (o HyperShiftOperatorDeployment) Build() *appsv1.Deployment {
 		})
 	}
 
+	// Add OpenTelemetry tracing configuration
+	// The operator sends traces to a local agent via OTLP gRPC
+	envVars = append(envVars, corev1.EnvVar{
+		Name: "NODE_NAME",
+		ValueFrom: &corev1.EnvVarSource{
+			FieldRef: &corev1.ObjectFieldSelector{
+				FieldPath: "metadata.name",
+			},
+		},
+	})
+	envVars = append(envVars, corev1.EnvVar{
+		Name:  "OTEL_EXPORTER_OTLP_ENDPOINT_PORT",
+		Value: "4317",
+	})
+	envVars = append(envVars, corev1.EnvVar{
+		Name:  "OTEL_TRACING_SAMPLING_RATE_PER_MILLION",
+		Value: "1000000", // 100% sampling - adjust for production
+	})
+
 	image := o.OperatorImage
 
 	if mapImage, ok := o.Images["hypershift-operator"]; ok {
@@ -968,10 +987,11 @@ func (o ExternalDNSPodMonitor) Build() *prometheusoperatorv1.PodMonitor {
 					"name": ExternalDNSDeploymentName,
 				},
 			},
-			PodMetricsEndpoints: []prometheusoperatorv1.PodMetricsEndpoint{{
-				Port:     "metrics",
-				Interval: "30s",
-			},
+			PodMetricsEndpoints: []prometheusoperatorv1.PodMetricsEndpoint{
+				{
+					Port:     "metrics",
+					Interval: "30s",
+				},
 			},
 		},
 	}
